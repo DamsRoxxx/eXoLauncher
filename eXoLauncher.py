@@ -1,5 +1,6 @@
 # coding=UTF-8
 import zipfile
+from zipfile import BadZipfile
 import os.path
 import os
 import binascii
@@ -11,6 +12,11 @@ import ConfigParser
 import subprocess
 import logging
 
+#*****************************************************************
+#*****************************************************************
+# Tools
+#*****************************************************************
+#*****************************************************************
 def timestamp():
    now = time.time()
    localtime = time.localtime(now)
@@ -27,25 +33,53 @@ def zipdir(path, ziph):
 		for file in files:
 			absfilepath = os.path.join(root, file)
 			relfilepath = os.path.relpath(absfilepath, path)
-			logging.info("Archiving file : " + relfilepath)
+			logging.debug("Archiving file : " + relfilepath)
 			ziph.write(absfilepath, relfilepath)
+
+def searchFileInDirectories(dirs = [], filename = ""):
+	# For each directory
+	for dir in dirs:
+		if os.path.isdir(dir):
+			path = os.path.join(dir, filename)
+			if os.path.isfile(path):
+				return path
 
 #*****************************************************************
 # Constants
+_Name				= "eXoLauncher"
+_Version			= 0.2
+_eXoLauncherHelp 	= "Usage : eXoLauncher.py -r <eXo file>"
+
+# Mode
 _NoMode				= 0
-_ImportMode			= 1
-_ImportAllMode		= 2
-_LaunchMode			= 3
+_LaunchMode			= 1
+_ImportMode			= 2
+
+# eXo files
 _GameIni			= "game.ini"
 _DBConf				= "dosbox.conf"
 _DescTxt			= "desc.txt"
-_eXoGameDir 		= "Games"
+
+# ini files
 _eXoLoaderSection	= "Main"
-_eXoLauncherHelp 	= "Usage : eXoLauncher.py -r <romfile>"
 _CollectionKey		= "Collection"
 _GameNameKey		= "GameName"
 _ArchiveKey			= "Archive"
 _DBConfKey			= "DBConf"
+
+# Output directories
+_GamesDir 		= "games"
+_FrontsDir 		= "fronts"
+_BacksDir 		= "backs"
+_TitlesDir 		= "titles"
+_ScreensDir 	= "screenshots"
+_ManualsDir 	= "manuals"
+
+# eXo collection stuffs
+_eXoDosKey = "!dos"
+
+# Meagre stuffs
+_Meagre			= "Meagre"
 
 #*****************************************************************
 # Globals
@@ -57,43 +91,44 @@ cfgfile 				= scriptName + ".ini"
 dbbaseconf				= os.path.join(scriptdir, _DBConf)
 workingdir 				= os.path.join(scriptdir, "_temp")
 savesdir 				= os.path.join(scriptdir, "saves")
-gamesdir				= os.path.join(scriptdir, "games")
-imagedir				= os.path.join(scriptdir, "images")
-imagefrontdir			= os.path.join(imagedir, "fronts")
-imagebackdir			= os.path.join(imagedir, "backs")
-imagetitlesdir			= os.path.join(imagedir, "titles")
-imagescreensdir			= os.path.join(imagedir, "screenshots")
-manualsdir				= os.path.join(scriptdir, "manuals")
 
 # Init working directories
 if not os.path.isdir(workingdir): 		os.makedirs(workingdir)
 if not os.path.isdir(savesdir): 		os.makedirs(savesdir)
-if not os.path.isdir(gamesdir): 		os.makedirs(gamesdir)
-if not os.path.isdir(imagedir): 		os.makedirs(imagedir)
-if not os.path.isdir(imagefrontdir): 	os.makedirs(imagefrontdir)
-if not os.path.isdir(imagebackdir): 	os.makedirs(imagebackdir)
-if not os.path.isdir(imagetitlesdir): 	os.makedirs(imagetitlesdir)
-if not os.path.isdir(imagescreensdir): 	os.makedirs(imagescreensdir)
-if not os.path.isdir(manualsdir): 		os.makedirs(manualsdir)
 
-# Init logger
+#*****************************************************************
+# Logging
+root = logging.getLogger()
+root.setLevel(logging.DEBUG)
+
+# Adding file log handleer
 with open(logfile, 'w'): pass
-logging.basicConfig(filename=logfile, level=logging.INFO)
+fileHandler = logging.FileHandler(logfile)
+fileHandler.setLevel(logging.DEBUG)
+fileHandler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+root.addHandler(fileHandler)
 
+# Adding stdout log handler
+stdoutHandler = logging.StreamHandler(sys.stdout)
+stdoutHandler.setLevel(logging.INFO)
+stdoutHandler.setFormatter(logging.Formatter('%(message)s'))
+root.addHandler(stdoutHandler)
+
+#*****************************************************************
+# Configuration
 # Verify config file
 if not os.path.isfile(cfgfile):
-	print("No eXoLauncher configuration file ('" + cfgfile + "') found!")
+	logging.error("No eXoLauncher configuration file ('" + cfgfile + "') found!")
 	sys.exit(1)
 
 # Verify dosbox base conf
 if not os.path.isfile(dbbaseconf):
-	print("No base dosbox.conf ('" + dbbaseconf + "') found!")
+	logging.error("No base dosbox.conf ('" + dbbaseconf + "') found!")
 	sys.exit(1)
 
-#*****************************************************************
-# Configuration
-logging.info("<<< Configuration >>>")
 # Read config file
+logging.debug("<<< Global configuration >>>")
+logging.debug("Reading configuration file...")
 eXoLConfig = ConfigParser.ConfigParser()
 eXoLConfig.optionxform=str # For case sensitiveness
 
@@ -102,24 +137,17 @@ eXoLConfig.read(cfgfile)
 
 # Get DosBOX path
 dosboxpath = eXoLConfig.get(_eXoLoaderSection, "DosBOX")
-logging.info("DosBOX : " + dosboxpath)
+logging.debug("DosBOX : " + dosboxpath)
 if not os.path.isfile(dosboxpath):
-	print("DosBOX '" + dosboxpath + "' not found!")
+	logging.error("DosBOX '" + dosboxpath + "' not found!")
 	sys.exit(1)
 
 # Get eXoDOS collections
-eXoCollections = dict()
+eXoCollections = []
 for option in eXoLConfig.options("Collections"):
 	colpath = eXoLConfig.get("Collections", option)
-	logging.info("Collection[" + option + "] : " + colpath)
-	eXoCollections[option] = colpath
-	
-# Get eXoDOS archives
-eXoArchives = dict()
-for option in eXoLConfig.options("Archives"):
-	arcpath = eXoLConfig.get("Archives", option)
-	logging.info("Archive[" + option + "] : " + arcpath)
-	eXoArchives[option] = arcpath
+	logging.debug("Collection[" + option + "] : " + colpath)
+	eXoCollections.append(colpath)
 
 #*****************************************************************
 #*****************************************************************
@@ -128,54 +156,47 @@ for option in eXoLConfig.options("Archives"):
 #*****************************************************************
 def eXoLaunch(romfile):
 	if not os.path.isfile(romfile):
-		print("Invalid \"rom\" file ('" + romfile + "')!")
-		print(_eXoLauncherHelp)
+		logging.error("Invalid \"rom\" file ('" + romfile + "')!")
+		logging.info(_eXoLauncherHelp)
 		sys.exit(1)
-
-	#*****************************************************************
-	# Read "rom" file
-	collection	= ""
-	gamename	= ""
-	archive		= ""
 	
 	# Opening rom
-	eXoFile = zipfile.ZipFile(romfile)
+	try:
+		eXoFile = zipfile.ZipFile(romfile)
+		eXoFile.getinfo(_GameIni)
+		eXoFile.getinfo(_DBConf)
+	except (BadZipfile, KeyError):
+		logging.error("File '" + romfile + "' does not seems to be a valid eXo file!")
+		sys.exit(1)
 
 	# Reading config
-	print("Reading \"rom\" file '" + romfile + "'")
+	logging.info("Reading eXo file '" + romfile + "'...")
 	configparser = ConfigParser.ConfigParser()
 	configparser.optionxform=str # For case sensitiveness
 	configparser.readfp(eXoFile.open(_GameIni))
-	collection	= configparser.get(_eXoLoaderSection, _CollectionKey)
 	gamename	= configparser.get(_eXoLoaderSection, _GameNameKey)
 	archive		= configparser.get(_eXoLoaderSection, _ArchiveKey)
 
-	#Verifying
-	if not collection:
-		print("Invalid Collection. Check config file!")
-		sys.exit(1)
-
 	if not gamename:
-		print("Invalid Game Name. Check config file!")
+		logging.error("Invalid Game Name. Contact your guru!")
 		sys.exit(1)
 
 	if not archive:
-		print("Invalid Archive. Check config file!")
+		logging.error("Invalid Archive. Contact your guru!")
 		sys.exit(1)
 
-	# Collection
-	if collection not in eXoCollections:
-		print("Invalid collection '" + collection + "'!")
-		sys.exit(1)
+	logging.info("GameName : " + gamename)
+	logging.info("Archive  : " + archive)
 
-	# Archive
-	archivepath = os.path.join(os.path.join(eXoCollections[collection], _eXoGameDir), archive)
-	if not os.path.isfile(archivepath):
-		print("Archive '" + archivepath + "' not found!")
+	# Verify archive
+	archivepath = searchFileInDirectories(eXoCollections, archive)
+	if not archivepath:
+		logging.error("No archive '" + archivepath + "' found in any collection!")
 		sys.exit(1)
 
 	#*****************************************************************
 	# Initialisation
+	logging.debug("<<< Initialisation >>>")
 
 	# Setting up directories
 	gamedir 	= os.path.join(workingdir, timestamp())
@@ -183,43 +204,40 @@ def eXoLaunch(romfile):
 	gamedbconf	= os.path.join(gamedir, _DBConf)
 
 	# Logging
-	logging.info("<<< Initialisation >>>")
-	logging.info("Launching : [" + collection + "]" + gamename)
-	logging.info("Archive : " + archive)
-	logging.info("Game directory : '" + gamedir + "'")
-	logging.info("Savegame : '" + savepath + "'")
-	logging.info("Dosbox config file : '" + gamedbconf + "'")
+	logging.debug("Game directory : '" + gamedir + "'")
+	logging.debug("Savegame : '" + savepath + "'")
+	logging.debug("Dosbox config file : '" + gamedbconf + "'")
 
 	#*****************************************************************
 	# Pre-processing
-	logging.info("<<< Pre-processing >>>")
+	logging.debug("<<< Pre-processing >>>")
 
 	# Creating game directory
 	os.makedirs(gamedir)
 
 	# Extracting game
-	logging.info(">>> Extraction")
+	logging.info("Extracting game archive...")
 	zipFilesCRC = dict()
 	zfile = zipfile.ZipFile(archivepath)
 	for info in zfile.infolist():
-		logging.info("Extracting '" + info.filename + "'")
+		logging.debug("Extracting '" + info.filename + "'")
 		zipFilesCRC[info.filename] = info.CRC
 		zfile.extract(info, gamedir)
 	zfile.close()
 
 	# if there is a save
-	logging.info(">>> Savegame")
+	logging.info("Looking for a save archive...")
 	if os.path.isfile(savepath):
-		logging.info("Extracting save...")
+		logging.info("> Extracting save archive...")
 		# Extract it
 		savezip = zipfile.ZipFile(savepath)
 		savezip.extractall(gamedir)
 		savezip.close()
 	else:
-		logging.info("No savegame found")
+		logging.info("> No savegame found")
 
-	# Importing/Modifying the configuration
-	logging.info(">>> Configuration")
+	# Converting/Modifying the configuration
+	logging.info("Configuration...")
 	confout	= open(gamedbconf, "wb")
 	for line in eXoFile.open(_DBConf):
 		newline = line
@@ -229,17 +247,17 @@ def eXoLaunch(romfile):
 
 	#*****************************************************************
 	# Execution
-	logging.info("<<< Execution >>>")
+	logging.debug("<<< Execution >>>")
 
 	# Launching dosbox
 	logging.info("Launching DOSBox...")
 	process = subprocess.Popen([dosboxpath, r'-noconsole', r'-exit', r'-conf', dbbaseconf, r'-conf', gamedbconf])
 	process.wait()
-	logging.info("DOSBox was closed(" + str(process.returncode) + ")")
+	logging.info("DOSBox exited(" + str(process.returncode) + ")")
 
 	#*****************************************************************
 	# Post-processing
-	logging.info("<<< Post-processing >>>")
+	logging.debug("<<< Post-processing >>>")
 
 	# Deleting configuration
 	os.remove(gamedbconf)
@@ -253,31 +271,31 @@ def eXoLaunch(romfile):
 			localFileCRC 	= getCRC(localFile) % 2**32
 			#logging.info(localFile + "[" + str(localFileCRC) + "]")
 			if localFileCRC == zipFileCRC:
-				logging.info("Removing unmodified file '" + localFile + "'")
+				logging.debug("Removing unmodified file '" + localFile + "'")
 				os.remove(localFile)
 		elif os.path.isdir(localFile):
 			if not os.listdir(localFile):
-				logging.info("Removing unmodified dir '" + localFile + "'")
+				logging.debug("Removing unmodified dir '" + localFile + "'")
 				os.rmdir(localFile)
 
 	# If there is stuff left
 	logging.info("Saving...")
 	if os.listdir(gamedir):
 		# Save it
-		logging.info("Saving modified files into '" + savepath + "'...")
+		logging.info("> Saving modified files into '" + savepath + "'...")
 		zipf = zipfile.ZipFile(savepath, 'w')
 		zipdir(gamedir, zipf)
 		zipf.close()
 	else:
-		logging.info("No modified files...")
+		logging.info("> No modified files.")
 
 	# Removing game directory
-	logging.info("Removing game directory...")
+	logging.info("Removing temporary directory...")
 	shutil.rmtree(gamedir)
 
 #*****************************************************************
 #*****************************************************************
-# Import Mode
+# Convert Mode
 #*****************************************************************
 #*****************************************************************
 def importRenameFile(src, name, dstDir):
@@ -285,10 +303,10 @@ def importRenameFile(src, name, dstDir):
 	dstname				= name + fileext
 	dst					= os.path.join(dstDir, dstname)
 	shutil.copyfile(src, dst)
-	
 
-def eXoImportArts(eXoGamedir, eXoIniPath, eXoGameName):
-	logging.info(">>> Importing artworks '" + eXoGameName + "'...")
+def eXoConvertArts(eXoGamedir, eXoIniPath, eXoGameName, outputDirs):
+	logging.debug("Converting artworks '" + eXoGameName + "'...")
+	
 	configparser = ConfigParser.ConfigParser()
 	configparser.optionxform=str # For case sensitiveness
 	configparser.read(eXoIniPath)
@@ -298,43 +316,53 @@ def eXoImportArts(eXoGamedir, eXoIniPath, eXoGameName):
 	back		= configparser.get("Main", "Back01")
 	title		= configparser.get("Main", "Title01")
 	screenshot	= configparser.get("Main", "Screen01")
-	manual		= configparser.get("Main", "Manual")
-	
+
 	# If valid
 	if front:
-		filename = os.path.join(eXoGamedir, "Meagre", "Front", front)
+		filename = os.path.join(eXoGamedir, _Meagre, "Front", front)
 		if os.path.isfile(filename):
-			importRenameFile(filename, eXoGameName, imagefrontdir)
+			importRenameFile(filename, eXoGameName, outputDirs[_FrontsDir])
 	if back:
-		filename = os.path.join(eXoGamedir, "Meagre", "Back", back)
+		filename = os.path.join(eXoGamedir, _Meagre, "Back", back)
 		if os.path.isfile(filename):
-			importRenameFile(filename, eXoGameName, imagebackdir)
+			importRenameFile(filename, eXoGameName, outputDirs[_BacksDir])
 	if title:
-		filename = os.path.join(eXoGamedir, "Meagre", "Title", title)
+		filename = os.path.join(eXoGamedir, _Meagre, "Title", title)
 		if os.path.isfile(filename):
-			importRenameFile(filename, eXoGameName, imagetitlesdir)
+			importRenameFile(filename, eXoGameName, outputDirs[_TitlesDir])
 	if screenshot:
-		filename = os.path.join(eXoGamedir, "Meagre", "Screen", screenshot)
+		filename = os.path.join(eXoGamedir, _Meagre, "Screen", screenshot)
 		if os.path.isfile(filename):
-			importRenameFile(filename, eXoGameName, imagescreensdir)
-	if manual:
-		filename = os.path.join(eXoGamedir, "Meagre", "Manual", manual)
-		if os.path.isfile(filename):
-			importRenameFile(filename, eXoGameName, manualsdir)
+			importRenameFile(filename, eXoGameName, outputDirs[_ScreensDir])
 
-def eXoImportIniFile(collection, eXoGameName, archive, iniInPath, iniOutPath):
-	logging.info(">>> Importing ini file '" + iniInPath + "' into '" + iniOutPath + "'")
+def eXoConvertManual(eXoGamedir, eXoIniPath, eXoGameName, outputDirs):
+	logging.debug("Converting manual '" + eXoGameName + "'...")
+	
+	configparser = ConfigParser.ConfigParser()
+	configparser.optionxform=str # For case sensitiveness
+	configparser.read(eXoIniPath)
+	
+	# Read values
+	manual		= configparser.get("Main", "Manual")
+
+	# If valid
+	if manual:
+		filename = os.path.join(eXoGamedir, _Meagre, "Manual", manual)
+		if os.path.isfile(filename):
+			importRenameFile(filename, eXoGameName, outputDirs[_ManualsDir])
+
+def eXoConvertIniFile(eXoGameName, archive, iniInPath, iniOutPath):
+	logging.debug("Converting ini file '" + iniInPath + "' into '" + iniOutPath + "'")
 	configparser = ConfigParser.ConfigParser()
 	configparser.optionxform=str # For case sensitiveness
 	configparser.read(iniInPath)
-	configparser.set(_eXoLoaderSection, _CollectionKey, collection)
 	configparser.set(_eXoLoaderSection, _GameNameKey, eXoGameName)
 	configparser.set(_eXoLoaderSection, _ArchiveKey, archive)
 	with open(iniOutPath, 'w') as configfile: configparser.write(configfile)
 
-def eXoImportDosBOXConf(dbConfInPath, dbConfOutPath):
-	# Importing/Modifying the configuration
-	logging.info(">>> Importing DosBOX configuration '" + dbConfInPath + "' into '" + dbConfOutPath + "'")
+def eXoConvertDosBOXConf(dbConfInPath, dbConfOutPath):
+	# Converting/Modifying the configuration
+	logging.debug("Converting DosBOX configuration '" + dbConfInPath + "' into '" + dbConfOutPath + "'")
 	currentKey	= ""
 	confin 		= open(dbConfInPath, "rb")
 	confout		= open(dbConfOutPath, "wb")
@@ -353,8 +381,8 @@ def eXoImportDosBOXConf(dbConfInPath, dbConfOutPath):
 	confout.close()
 	confin.close()
 
-def eXoImportDesc(eXoGamedir, eXoIniPath, outputFile):
-	logging.info(">>> Importing description...")
+def eXoConvertDesc(eXoGamedir, eXoIniPath, outputFile):
+	logging.debug("Converting description...")
 	configparser = ConfigParser.ConfigParser()
 	configparser.optionxform=str # For case sensitiveness
 	configparser.read(eXoIniPath)
@@ -362,101 +390,153 @@ def eXoImportDesc(eXoGamedir, eXoIniPath, outputFile):
 	# Read values
 	about	= configparser.get("Main", "About")
 	if about:
-		filename = os.path.join(eXoGamedir, "Meagre", "About", about)
+		filename = os.path.join(eXoGamedir, _Meagre, "About", about)
 		if os.path.isfile(filename):
 			shutil.copyfile(filename, outputFile)
 
 def eXoCreateFile(filename, dir):
-	# Importing/Modifying the configuration
-	logging.info(">>> Creating eXoFile  '" + filename + "'")
+	logging.debug("Creating eXoFile  '" + filename + "'...")
 	zipf = zipfile.ZipFile(filename, 'w')
 	zipdir(dir, zipf)
 	zipf.close()
 
-def eXoImportGame(collection, eXoGamedir, eXoIniPath, doImportArtworks=False):
-	# Init
-	eXoGameName, eXoIniExt 	= os.path.splitext(os.path.basename(eXoIniPath))
-	eXoDBConfPath 	= os.path.join(eXoGamedir, _DBConf)
+def eXoConvertGame(dir, eXoRef, eXoGameName, outputDirs):
+	logging.info("Converting game '" + eXoGameName + "'...")
+	eXoGameDir		= os.path.join(dir, eXoRef)
 	eXoArchiveFile 	= eXoGameName + ".zip"
-	eXoArchivePath 	= os.path.join(eXoCollections[collection], _eXoGameDir, eXoArchiveFile)
 	
+	# Verifying Ini file
+	eXoIniPath 	= os.path.join(eXoGameDir, _Meagre, "IniFile", eXoGameName + ".ini")
+	if not os.path.isfile(eXoIniPath):
+		logging.warning("Ini file '" + eXoIniPath + "' not found for " + eXoGameName + "! -> Skipping")
+
 	# Verifying DosBOX conf
+	eXoDBConfPath 	= os.path.join(eXoGameDir, _DBConf)
 	if not os.path.isfile(eXoDBConfPath):
-		logging.error("DosBOX config file '" + eXoDBConfPath + "' not found in collection!")
+		logging.warning("DosBOX config file '" + eXoDBConfPath + "' not found for " + eXoGameName + "! -> Skipping")
 
 	# Verifying archive
-	if not os.path.isfile(eXoArchivePath):
-		logging.error("Archive '" + eXoArchiveFile + "' not found in collection!")
+	eXoArchivePath	= searchFileInDirectories(eXoCollections, eXoArchiveFile)
+	if not eXoArchivePath:
+		logging.warning("No archive '" + eXoArchiveFile + "' found in any collection! -> Skipping")
 		return
 	
 	# Creating temp dir
 	tempDir = os.path.join(workingdir, timestamp())
 
-	# Import game
+	# Convert game
 	os.makedirs(tempDir)
-	logging.info(">>> Importing game '" + eXoGameName + "'...")
-	eXoImportIniFile(collection, eXoGameName, eXoArchiveFile, eXoIniPath, os.path.join(tempDir, _GameIni))
-	eXoImportDosBOXConf(eXoDBConfPath, os.path.join(tempDir, _DBConf))
-	eXoImportDesc(eXoGamedir, eXoIniPath, os.path.join(tempDir, _DescTxt))
-	eXoCreateFile(os.path.join(gamesdir, eXoGameName + ".eXo"), tempDir)
+	eXoConvertIniFile(eXoGameName, eXoArchiveFile, eXoIniPath, os.path.join(tempDir, _GameIni))
+	eXoConvertDosBOXConf(eXoDBConfPath, os.path.join(tempDir, _DBConf))
+	eXoConvertDesc(eXoGameDir, eXoIniPath, os.path.join(tempDir, _DescTxt))
+	eXoCreateFile(os.path.join(outputDirs[_GamesDir], eXoGameName + ".eXo"), tempDir)
 	shutil.rmtree(tempDir)
 	
-	if doImportArtworks:
-		eXoImportArts(eXoGamedir, eXoIniPath, eXoGameName)
+	# Convert artworks
+	if _FrontsDir in outputDirs:
+		eXoConvertArts(eXoGameDir, eXoIniPath, eXoGameName, outputDirs)
 
-def eXoImportCollection(collection, doImportArtworks=False):
-	logging.info("<<< Importing '" + collection +"' collection >>>")
+	# Convert manual
+	if _ManualsDir in outputDirs:
+		eXoConvertManual(eXoGameDir, eXoIniPath, eXoGameName, outputDirs)
 
-	if collection not in eXoCollections:
-		print("Invalid collection '" + collection + "'!")
-		sys.exit(1)
-
-	if collection not in eXoArchives:
-		print("Invalid archive for collection '" + collection + "'!")
-		sys.exit(1)
-
-	# Init
-	eXoGamesArcPath	= eXoArchives[collection]
+def eXoConvertDir(dir, outputDirs):
+	# Verify
+	if not os.path.isdir(dir):
+		logging.error("Directory '" + dir + "' not found!")
+		return(1)
 	
+	logging.info("Converting '" + dir +"' directory...")
+	eXoDir = os.path.join(dir, _eXoDosKey)
+	
+	if not os.path.isdir(eXoDir):
+		logging.error("Directory '" + dir + "' does not seems to be an eXoDOS directory (no '!dos' dir inside)!")
+		return(1)
+
+	# Process
+	for root, dirs, files in os.walk(dir):
+		for file in files:
+			if ".ini" in file:
+				logging.debug("Found ini file '" + file + "'. Processing...")
+				absfilepath 			= os.path.join(root, file)
+				relfilepath 			= os.path.relpath(absfilepath, eXoDir)
+				eXoRef		 			= relfilepath.split(os.sep)[0]
+				eXoGameName, eXoIniExt 	= os.path.splitext(os.path.basename(file))
+
+				# Convert
+				eXoConvertGame(eXoDir, eXoRef, eXoGameName, outputDirs)
+
+def eXoConvertArchive(eXoGamesArcPath, outputDirs):
 	# If archive not exists
 	if not os.path.isfile(eXoGamesArcPath):
-		print("'" + eXoGamesArcPath + "' not found!")
-		sys.exit(1)
+		logging.error("File '" + eXoGamesArcPath + "' not found!")
+		return(1)
 	
+	logging.debug("Converting archive file '" + eXoGamesArcPath + "'...")
+	
+	# Open archive
+	logging.info("Opening archive file '" + eXoGamesArcPath + "'...")
+	try:
+		archive = zipfile.ZipFile(eXoGamesArcPath)
+		archive.getinfo(_eXoDosKey + "/")
+	except KeyError:
+		logging.error("File '" + eXoGamesArcPath + "' does not seems to be an eXoDOS archive (no '!dos' dir inside)!")
+		return(1)
+	except BadZipfile:
+		logging.error("File '" + eXoGamesArcPath + "' is not a valid zip archive!")
+		return(1)
+
 	# Creating temp dir
+	logging.info("Creating temporary directory...")
 	tempDir = os.path.join(workingdir, timestamp())
 	os.makedirs(tempDir)
-	
-	# Extract the archive
-	logging.info("Found archive file '" + eXoGamesArcPath + "'. Extracting...")
-	zfile = zipfile.ZipFile(eXoGamesArcPath)
-	zfile.extractall(tempDir)
-	zfile.close()
-	
-	# Processing informations
-	collectiondir = os.path.join(tempDir, "!dos")
-	for root, dirs, files in os.walk(collectiondir):
-		for file in files:
-			absfilepath = os.path.join(root, file)
-			relfilepath = os.path.relpath(absfilepath, collectiondir)
-			if ".ini" in relfilepath:
-				logging.info("Found ini file '" + relfilepath + "'. Processing...")
-				eXoRef		 	= relfilepath.split(os.sep)[0]
-				eXoGamedir		= os.path.join(collectiondir, eXoRef)
 
-				# Import
-				eXoImportGame(collection, eXoGamedir, absfilepath, doImportArtworks)
+	# Convert
+	logging.info("Extracting archive file '" + eXoGamesArcPath + "'...")
+	archive.extractall(tempDir)
+	
+	# Convert directory
+	eXoConvertDir(tempDir, outputDirs)
 	
 	# Removing temp directory
-	logging.info("Removing game directory...")
+	logging.info("Removing temporary directory...")
 	shutil.rmtree(tempDir)
 
-def eXoImportAllCollections(doImportArtworks=False):
-	logging.info("<<< Importing all collections >>>")
+def eXoConvertCollection(collection, outputDirs, doImportArtworks, doImportManuals):
+	# According to parameter (file/directory)
+	if os.path.isfile(collection):
+		# Convert archive
+		eXoConvertArchive(collection, outputDirs)
+	elif os.path.isdir(collection):
+		# Convert directory
+		eXoConvertDir(collection, outputDirs)
+	else:
+		logging.error("File '" + collection + "' not found!")
+		return(1)
+
+def eXoImportCollection(collection, outputDir, doImportArtworks, doImportManuals):
+	# Game dir
+	outputDirs = dict()
+	outputDirs[_GamesDir] = os.path.join(outputDir, _GamesDir)
 	
-	# For each collection
-	for collection in eXoCollections.keys():
-		eXoImportCollection(collection, doImportArtworks)
+	# Artwork
+	if doImportArtworks:
+		outputDirs[_FrontsDir] 	= os.path.join(outputDir, _FrontsDir)
+		outputDirs[_BacksDir] 	= os.path.join(outputDir, _BacksDir)
+		outputDirs[_TitlesDir] 	= os.path.join(outputDir, _TitlesDir)
+		outputDirs[_ScreensDir] = os.path.join(outputDir, _ScreensDir)
+	
+	# Manuals
+	if doImportManuals:
+		outputDirs[_ManualsDir] = os.path.join(outputDir, _ManualsDir)
+	
+	# Create output dirs
+	for dir in outputDirs.values():
+		if not os.path.isdir(dir): 
+			os.makedirs(dir)
+
+	# Convert collection
+	eXoConvertCollection(collection, outputDirs, doImportArtworks, doImportManuals)
 
 #*****************************************************************
 #*****************************************************************
@@ -464,32 +544,35 @@ def eXoImportAllCollections(doImportArtworks=False):
 #*****************************************************************
 #*****************************************************************
 def eXoExportLaunchbox(filename):
-	logging.info(">>> Exporting collections to LaunchBox...")
+	logging.info("Exporting collections to LaunchBox...")
 
 def eXoExport(filename):
 	logging.info("<<< Exporting collections >>>")
 
+#*****************************************************************
+#*****************************************************************
+# Main
+#*****************************************************************
+#*****************************************************************
 
 def main(argv):
 	#*****************************************************************
-	# Initialisation
-
-
-	#*****************************************************************
 	# Arguments
 	mode 				= _NoMode
-	doImportArtworks	= False
 	romfile				= ""
-	collection		= ""
-
+	collection			= ""
+	outputDir			= ""
+	doImportArtworks	= False
+	doImportManuals		= False
+	
 	try:
-	  opts, args = getopt.getopt(argv,"haIr:i:",["rom="])
+	  opts, args = getopt.getopt(argv,"hamr:i:o:",["rom="])
 	except getopt.GetoptError:
-	  print(_eXoLauncherHelp)
+	  logging.info(_eXoLauncherHelp)
 	  sys.exit(2)
 	for opt, arg in opts:
 	  if opt == '-h':
-		print(_eXoLauncherHelp)
+		logging.info(_eXoLauncherHelp)
 		sys.exit()
 	  elif opt in ("-r", "--rom"):
 		mode = _LaunchMode
@@ -497,23 +580,27 @@ def main(argv):
 	  elif opt in ("-i", "--import"):
 		mode = _ImportMode
 		collection = arg
-	  elif opt in ("-a", "--artworks"):
+	  elif opt in ("-o", "--output"):
+		outputDir = arg
+		if not os.path.isdir(outputDir):
+			logging.error("Invalid output directory '" + outputDir + "'!")
+			sys.exit(2)
+	  elif opt in ("-a"):
 		doImportArtworks = True
-	  elif opt in ("-I", "--importAll"):
-		mode = _ImportAllMode
+	  elif opt in ("-m"):
+		doImportManuals = True
 
-	# Launch mode
 	if mode == _LaunchMode:
 		# Launch the rom file
 		eXoLaunch(romfile)
 	elif mode == _ImportMode:
-		# Import the collection
-		eXoImportCollection(collection, doImportArtworks)
-	elif mode == _ImportAllMode:
-		# Import all the collections
-		eXoImportAllCollections(doImportArtworks)
+		if not outputDir:
+			logging.error("You must provides an output directory -o)!")
+			sys.exit(2)
+		# Convert the collection
+		eXoImportCollection(collection, outputDir, doImportArtworks, doImportManuals)
 	else:
-		print(_eXoLauncherHelp)
+		logging.info(_eXoLauncherHelp)
 		sys.exit(2)
 
 if __name__ == "__main__":
