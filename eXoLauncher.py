@@ -14,79 +14,12 @@ import subprocess
 import logging
 import datetime
 import random
+import random
 import string
 import uuid
 import traceback
 import xml.etree.ElementTree as ET
 
-#*****************************************************************
-#*****************************************************************
-# Tools
-#*****************************************************************
-#*****************************************************************
-def timestamp():
-   return datetime.datetime.now().strftime('%Y%m%d%H%M%S.%f')
-   
-def id_generator(size=6, chars=string.ascii_uppercase + string.digits):
-	return ''.join(random.choice(chars) for _ in range(size))
-
-tempDirs = []
-def mkTempDir():
-	tempDir = os.path.join(workingdir, id_generator())
-	os.makedirs(tempDir)
-	tempDirs.append(tempDir)
-	return(tempDir)
-
-def rmTempDir(tempDir):
-	if tempDir in tempDirs:
-		retry = 0
-		while True:
-			try:
-				shutil.rmtree(tempDir)
-				tempDirs.remove(tempDir)
-				return
-			except:
-				#Sometimes rmtree fails so we will retry 3 times
-				if retry >= 2:
-					raise
-			retry = retry + 1
-			time.sleep(1)
-
-def getCRC(filename):
- filedata = open(filename, 'rb').read()
- return binascii.crc32(filedata)
-
-def zipdir(path, ziph):
-	# ziph is zipfile handle
-	for root, dirs, files in os.walk(path):
-		for file in files:
-			absfilepath = os.path.join(root, file)
-			relfilepath = os.path.relpath(absfilepath, path)
-			logging.debug("Archiving file : " + relfilepath)
-			ziph.write(absfilepath, relfilepath)
-
-def searchFileInDirectories(dirs = [], filename = ""):
-	# For each directory
-	for dir in dirs:
-		if os.path.isdir(dir):
-			path = os.path.join(dir, filename)
-			if os.path.isfile(path):
-				return path
-
-def indent(elem, level=0):
-    i = "\n" + level*"  "
-    if len(elem):
-        if not elem.text or not elem.text.strip():
-            elem.text = i + "  "
-        if not elem.tail or not elem.tail.strip():
-            elem.tail = i
-        for elem in elem:
-            indent(elem, level+1)
-        if not elem.tail or not elem.tail.strip():
-            elem.tail = i
-    else:
-        if level and (not elem.tail or not elem.tail.strip()):
-            elem.tail = i
 #*****************************************************************
 # Constants
 _Name				= "eXoLauncher"
@@ -126,13 +59,14 @@ _eXoMapperMap		= "mapper-0.74.map"
 _eXoInstallBat		= "Install.bat"
 
 # Meagre stuffs
-_Meagre			= "Meagre"
+_Meagre				= "Meagre"
 
 #*****************************************************************
 # Globals
 asciiCorrector			= re.compile(r'[^\x00-\x7F]+')
 nameCleaner				= re.compile(r"\(.*\)")
 archiveNameMatcher		= re.compile(r"unzip[^\"]*\"([^\"]*)\"")
+slotsMatcher			= re.compile(r"slot(\d\d)")
 scriptpath 				= os.path.realpath(__file__)
 scriptdir				= os.path.dirname(scriptpath)
 scriptName, scriptExt 	= os.path.splitext(os.path.basename(scriptpath))
@@ -141,69 +75,263 @@ cfgfile 				= scriptName + ".ini"
 dbbaseconf				= os.path.join(scriptdir, _DBConf)
 workingdir 				= os.path.join(scriptdir, "_temp")
 savesdir 				= os.path.join(scriptdir, "saves")
-
-# Init working directories
-if not os.path.isdir(workingdir): 		os.makedirs(workingdir)
-if not os.path.isdir(savesdir): 		os.makedirs(savesdir)
+gamesdir 				= os.path.join(scriptdir, "games")
+maxSlots				= 11
 
 #*****************************************************************
-# Logging
-root = logging.getLogger()
-root.setLevel(logging.DEBUG)
-
-# Adding file log handleer
-with open(logfile, 'w'): pass
-fileHandler = logging.FileHandler(logfile)
-fileHandler.setLevel(logging.DEBUG)
-fileHandler.setFormatter(logging.Formatter('%(asctime)s - [%(levelname)s]\t - %(message)s'))
-root.addHandler(fileHandler)
-
-# Adding stdout log handler
-stdoutHandler = logging.StreamHandler(sys.stdout)
-stdoutHandler.setLevel(logging.INFO)
-stdoutHandler.setFormatter(logging.Formatter('%(message)s'))
-root.addHandler(stdoutHandler)
-
 #*****************************************************************
-# Configuration
-# Verify config file
-if not os.path.isfile(cfgfile):
-	logging.error("No eXoLauncher configuration file ('" + cfgfile + "') found!")
-	sys.exit(1)
+# Tools
+#*****************************************************************
+#*****************************************************************
+def timestamp():
+   return datetime.datetime.now().strftime('%Y%m%d%H%M%S.%f')
+   
+def id_generator(size=6, chars=string.ascii_uppercase + string.digits):
+	return ''.join(random.choice(chars) for _ in range(size))
 
-# Verify dosbox base conf
-if not os.path.isfile(dbbaseconf):
-	logging.error("No base dosbox.conf ('" + dbbaseconf + "') found!")
-	sys.exit(1)
+tempDirs = []
+def mkTempDir():
+	tempDir = os.path.join(workingdir, id_generator())
+	os.makedirs(tempDir)
+	tempDirs.append(tempDir)
+	return(tempDir)
 
-# Read config file
-logging.debug("<<< Global configuration >>>")
-logging.debug("Reading configuration file...")
-eXoLConfig = ConfigParser.ConfigParser()
-eXoLConfig.optionxform=str # For case sensitiveness
+def rmTree(dir):
+	retry = 0
+	while True:
+		try:
+			logging.debug("Removing dir '%r'", dir)
+			shutil.rmtree(dir)
+			return
+		except:
+			#Sometimes rmtree fails so we will retry 3 times
+			if retry >= 2:
+				logging.debug("Removing dir '%r' failed! -> Fatal", dir)
+				raise
+		logging.debug("Removing dir '%r' failed! -> Retry in 5s", dir)
+		retry = retry + 1
+		time.sleep(5)
 
-# Open config file
-eXoLConfig.read(cfgfile)
+def rmTempDir(tempDir):
+	if tempDir in tempDirs:
+		retry = 0
+		while True:
+			try:
+				logging.debug("Removing dir '%r'", tempDir)
+				rmTree(tempDir)
+				tempDirs.remove(tempDir)
+				return
+			except:
+				#Sometimes rmtree fails so we will retry 3 times
+				if retry >= 2:
+					logging.debug("Removing dir '%r' failed! -> Fatal", tempDir)
+					raise
+			logging.debug("Removing dir '%r' failed! -> Retry in 5s", tempDir)
+			retry = retry + 1
+			time.sleep(5)
 
-# Get DosBOX path
-dosboxpath = eXoLConfig.get(_eXoLoaderSection, "DosBOX")
-logging.debug("DosBOX : " + dosboxpath)
-if not os.path.isfile(dosboxpath):
-	logging.error("DosBOX '" + dosboxpath + "' not found!")
-	sys.exit(1)
+def getCRC(filename):
+ filedata = open(filename, 'rb').read()
+ return binascii.crc32(filedata) % 2**32
 
-# Get eXoDOS collections
-eXoCollections = []
-for option in eXoLConfig.options("Collections"):
-	colpath = eXoLConfig.get("Collections", option)
-	logging.debug("Collection[" + option + "] : " + colpath)
-	eXoCollections.append(colpath)
+def zipdir(path, ziph):
+	# ziph is zipfile handle
+	for root, dirs, files in os.walk(path):
+		for file in files:
+			absfilepath = os.path.join(root, file)
+			relfilepath = os.path.relpath(absfilepath, path)
+			logging.debug("Archiving file : " + relfilepath)
+			ziph.write(absfilepath, relfilepath)
+
+def searchFileInDirectories(dirs = [], filename = ""):
+	# For each directory
+	for dir in dirs:
+		if os.path.isdir(dir):
+			path = os.path.join(dir, filename)
+			if os.path.isfile(path):
+				return path
+
+def xmlIndent(elem, level=0):
+    i = "\n" + level*"  "
+    if len(elem):
+        if not elem.text or not elem.text.strip():
+            elem.text = i + "  "
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+        for elem in elem:
+            xmlIndent(elem, level+1)
+        if not elem.tail or not elem.tail.strip():
+            elem.tail = i
+    else:
+        if level and (not elem.tail or not elem.tail.strip()):
+            elem.tail = i
 
 #*****************************************************************
 #*****************************************************************
 # Launch Mode
 #*****************************************************************
 #*****************************************************************
+def eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, gameDir):
+	savePath 	= os.path.join(savesdir, eXoGameName + ".zip")
+	
+	# Extracting game
+	logging.info("> Extracting game archive...")
+	zfile = zipfile.ZipFile(eXoArchivePath)
+	for info in zfile.infolist():
+		logging.debug(" > Extracting '" + info.filename + "'")
+		zfile.extract(info, gameDir)
+	zfile.close()
+	
+	# if there is a save
+	logging.info("> Looking for a save archive...")
+	if os.path.isfile(savePath):
+		logging.info(" > Extracting save archive...")
+		# Extract it
+		savezip = zipfile.ZipFile(savePath)
+		for info in savezip.infolist():
+			logging.debug(" > Extracting '" + info.filename + "'")
+			savezip.extract(info, gameDir)
+		savezip.close()
+	else:
+		logging.info(" > No savegame found")
+	
+	# Extracting game.ini
+	logging.info("> Extracting 'game.ini' file...")
+	eXoFile.extract(_GameIni, gameDir)
+	
+	# Converting/Modifying the configuration
+	logging.info("> Creating 'dosbox.conf'...")
+	confout	= open(os.path.join(gameDir, _DBConf), "wb")
+	for line in eXoFile.open(_DBConf):
+		newline = line
+		newline = newline.replace(r"__DB_ROOT_DIR__", gameDir)
+		confout.write(newline)
+	confout.close()
+
+def eXoGetInfos(eXoIniFile):
+	# Read the info
+	configparser = ConfigParser.ConfigParser()
+	configparser.optionxform=str # For case sensitiveness
+	configparser.read(eXoIniFile)
+	gamename	= configparser.get(_eXoLoaderSection, _GameNameKey)
+	archive		= configparser.get(_eXoLoaderSection, _ArchiveKey)
+	return(gamename, archive)
+
+def eXoUninstallGame(gameDir):
+	# Inifile
+	iniFile = os.path.join(gameDir, _GameIni)
+	if not os.path.isfile(iniFile):
+		logging.error("No 'game.ini' in '%s'! Clean manually.)", gameDir)
+		sys.exit(1)
+	
+	# Read the info
+	gamename, archive = eXoGetInfos(iniFile)
+	
+	# Verify archive
+	archivepath = searchFileInDirectories(eXoCollections, archive)
+	if not archivepath:
+		logging.error("Archive '%s' not found in any collection! Verify your collections.", archivepath)
+		sys.exit(1)
+	
+	# Gettings original CRCs
+	logging.debug("> Gettings original CRCs from '%s'...", archivepath)
+	zipFilesCRC = dict()
+	zfile = zipfile.ZipFile(archivepath)
+	for info in zfile.infolist():
+		zipFilesCRC[info.filename] = info.CRC
+	zfile.close()
+	
+	# Remove unmodified stuffs
+	logging.info("> Cleaning game directory...")
+	for zipFile in reversed(sorted(zipFilesCRC.keys())):
+		localFile 	= os.path.join(gameDir,zipFile)
+		if os.path.isfile(localFile):
+			zipFileCRC		= zipFilesCRC[zipFile]
+			localFileCRC 	= getCRC(localFile)
+			#logging.info(localFile + "[" + str(localFileCRC) + "]")
+			if localFileCRC == zipFileCRC:
+				logging.debug("Removing unmodified file '" + localFile + "'")
+				os.remove(localFile)
+		elif os.path.isdir(localFile):
+			if not os.listdir(localFile):
+				logging.debug("Removing unmodified dir '" + localFile + "'")
+				os.rmdir(localFile)
+	
+	# Deleting game.ini & dosbox.conf file
+	os.remove(iniFile)
+	os.remove(os.path.join(gameDir, _DBConf))
+	
+	# If there is stuff left
+	savePath 	= os.path.join(savesdir, gamename + ".zip")
+	logging.info("> Saving...")
+	if os.listdir(gameDir):
+		# Save it
+		logging.info(" > Saving modified files into '" + savePath + "'...")
+		zipf = zipfile.ZipFile(savePath, 'w')
+		zipdir(gameDir, zipf)
+		zipf.close()
+	else:
+		logging.info(" > No modified files.")
+
+def eXoFindFreeSlot(installedGames):
+		# Find a free slot
+		for slot in range(1, maxSlots):
+			if slot not in installedGames.values():
+				return slot
+
+def eXoGetSlotName(slot):
+	return "slot" + str(slot).rjust(2,'0')
+
+def eXoInstallGame(eXoFile, eXoGameName, eXoArchivePath):
+	logging.info("Installing game '%s'...", eXoGameName)
+	
+	# Gathering games in slots
+	usedSlots 		= dict()
+	installedGames 	= dict()
+	for dir in os.listdir(gamesdir):
+		item = os.path.join(gamesdir, dir)
+		if os.path.isdir(item):
+			matchObj = slotsMatcher.match(dir)
+			if matchObj is not None:
+				slot 	= int(matchObj.group(1))
+				iniFile = os.path.join(item, _GameIni)
+				if not os.path.isfile(iniFile):
+					logging.error("Invalid Slot[%i] : No 'game.ini' in '%s'! Clean manually.)", slot, item)
+					sys.exit(1)
+				gamename, archive = eXoGetInfos(iniFile)
+				logging.debug("Slot[%i] - %s", slot, gamename)
+				usedSlots[slot]			= gamename
+				installedGames[gamename] 	= slot
+	
+	# Game is already installed, return current dir
+	if eXoGameName in installedGames.keys():
+		logging.info("> Game '%s' is already installed in Slot[%i]", eXoGameName, slot)
+		return os.path.join(gamesdir, eXoGetSlotName(installedGames[eXoGameName]))
+	
+	# Find a free slot or uninstall game to get one
+	slot = eXoFindFreeSlot(installedGames)
+	if slot is None:
+		modifedSlots = dict()
+		logging.info("> No empty slots, uninstalling oldest not modified game...")
+		# Recovering modifications times
+		for slot in installedGames.values():
+			modificationTime = os.path.getmtime(os.path.join(gamesdir, eXoGetSlotName(slot)))
+			logging.debug("Slot[%i] - %s", slot, time.ctime(modificationTime))
+			modifedSlots[modificationTime] = slot
+		
+		# Uninstalling oldest
+		slot = modifedSlots[sorted(modifedSlots.keys())[0]]
+		logging.info("> Uninstalling Slot[%i] - %s...", slot, usedSlots[slot])
+		eXoUninstallGame(os.path.join(gamesdir, eXoGetSlotName(slot)))
+		rmTree(os.path.join(gamesdir, eXoGetSlotName(slot)))
+		
+	# Install game
+	logging.info("> Game '%s' will be installed in Slot[%i]", eXoGameName, slot)
+	slotDir = os.path.join(gamesdir, eXoGetSlotName(slot))
+	os.makedirs(slotDir)
+	eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, slotDir)
+	return slotDir
+
 def eXoLaunch(romfile):
 	if not os.path.isfile(romfile):
 		logging.error("Invalid \"rom\" file ('" + romfile + "')!")
@@ -211,6 +339,7 @@ def eXoLaunch(romfile):
 		sys.exit(1)
 	
 	# Opening rom
+	logging.info("Opening eXo file '" + romfile + "'...")
 	try:
 		eXoFile = zipfile.ZipFile(romfile)
 		eXoFile.getinfo(_GameIni)
@@ -220,7 +349,6 @@ def eXoLaunch(romfile):
 		sys.exit(1)
 
 	# Reading config
-	logging.info("Reading eXo file '" + romfile + "'...")
 	configparser = ConfigParser.ConfigParser()
 	configparser.optionxform=str # For case sensitiveness
 	configparser.readfp(eXoFile.open(_GameIni))
@@ -235,8 +363,8 @@ def eXoLaunch(romfile):
 		logging.error("Invalid Archive. Contact your guru!")
 		sys.exit(1)
 
-	logging.info("GameName : " + gamename)
-	logging.info("Archive  : " + archive)
+	logging.info("> GameName : " + gamename)
+	logging.info("> Archive  : " + archive)
 
 	# Verify archive
 	archivepath = searchFileInDirectories(eXoCollections, archive)
@@ -248,44 +376,8 @@ def eXoLaunch(romfile):
 	logging.debug("<<< Pre-processing >>>")
 
 	# Setting up directories
-	gamedir 	= mkTempDir()
-	savepath 	= os.path.join(savesdir, gamename + ".zip")
-	gamedbconf	= os.path.join(gamedir, _DBConf)
-
-	# Logging
-	logging.debug("Game directory : '" + gamedir + "'")
-	logging.debug("Savegame : '" + savepath + "'")
-	logging.debug("Dosbox config file : '" + gamedbconf + "'")
-	
-	# Extracting game
-	logging.info("Extracting game archive...")
-	zipFilesCRC = dict()
-	zfile = zipfile.ZipFile(archivepath)
-	for info in zfile.infolist():
-		logging.debug("Extracting '" + info.filename + "'")
-		zipFilesCRC[info.filename] = info.CRC
-		zfile.extract(info, gamedir)
-	zfile.close()
-
-	# if there is a save
-	logging.info("Looking for a save archive...")
-	if os.path.isfile(savepath):
-		logging.info("> Extracting save archive...")
-		# Extract it
-		savezip = zipfile.ZipFile(savepath)
-		savezip.extractall(gamedir)
-		savezip.close()
-	else:
-		logging.info("> No savegame found")
-
-	# Converting/Modifying the configuration
-	logging.info("Configuration...")
-	confout	= open(gamedbconf, "wb")
-	for line in eXoFile.open(_DBConf):
-		newline = line
-		newline = newline.replace(r"__DB_ROOT_DIR__", gamedir)
-		confout.write(newline)
-	confout.close()
+	gameDir 	= eXoInstallGame(eXoFile, gamename, archivepath)
+	gameDBConf 	= os.path.join(gameDir, _DBConf)
 
 	#*****************************************************************
 	# Execution
@@ -293,47 +385,9 @@ def eXoLaunch(romfile):
 
 	# Launching dosbox
 	logging.info("Launching DOSBox...")
-	process = subprocess.Popen([dosboxpath, r'-noconsole', r'-exit', r'-conf', dbbaseconf, r'-conf', gamedbconf])
+	process = subprocess.Popen([dosboxpath, r'-noconsole', r'-exit', r'-conf', dbbaseconf, r'-conf', gameDBConf])
 	process.wait()
 	logging.info("DOSBox exited(" + str(process.returncode) + ")")
-
-	#*****************************************************************
-	# Post-processing
-	logging.debug("<<< Post-processing >>>")
-
-	# Deleting configuration
-	os.remove(gamedbconf)
-
-	# Remove unmodified stuffs
-	logging.info("Cleaning game directory...")
-	for zipFile in reversed(sorted(zipFilesCRC.keys())):
-		localFile 	= os.path.join(gamedir,zipFile)
-		if os.path.isfile(localFile):
-			zipFileCRC		= zipFilesCRC[zipFile]
-			localFileCRC 	= getCRC(localFile) % 2**32
-			#logging.info(localFile + "[" + str(localFileCRC) + "]")
-			if localFileCRC == zipFileCRC:
-				logging.debug("Removing unmodified file '" + localFile + "'")
-				os.remove(localFile)
-		elif os.path.isdir(localFile):
-			if not os.listdir(localFile):
-				logging.debug("Removing unmodified dir '" + localFile + "'")
-				os.rmdir(localFile)
-
-	# If there is stuff left
-	logging.info("Saving...")
-	if os.listdir(gamedir):
-		# Save it
-		logging.info("> Saving modified files into '" + savepath + "'...")
-		zipf = zipfile.ZipFile(savepath, 'w')
-		zipdir(gamedir, zipf)
-		zipf.close()
-	else:
-		logging.info("> No modified files.")
-
-	# Removing game directory
-	logging.info("Removing temporary directory...")
-	rmTempDir(gamedir)
 
 #*****************************************************************
 #*****************************************************************
@@ -811,7 +865,7 @@ def eXoImportCollectionLB(collection, lbDir, doImportArtworks, doImportManuals):
 	logging.info("Backing up 'LaunchBox.xml'...")
 	shutil.copyfile(lbXml, os.path.join(lbDir, "LaunchBox.eXoBackup." + timestamp() + ".xml"))
 	logging.info("Saving updated 'LaunchBox.xml'...")
-	indent(lbElm)
+	xmlIndent(lbElm)
 	gamelistTree = ET.ElementTree(lbElm)
 	xmlDoc.write(os.path.join(lbDir, "LaunchBox.xml"), xml_declaration=True)
 
@@ -827,6 +881,68 @@ def eXoImportCollectionLB(collection, lbDir, doImportArtworks, doImportManuals):
 #*****************************************************************
 
 def main(argv):
+	global dosboxpath
+	global eXoCollections
+	
+	#*****************************************************************
+	# Working directories
+	# Init working directories
+	if not os.path.isdir(workingdir): 		os.makedirs(workingdir)
+	if not os.path.isdir(savesdir): 		os.makedirs(savesdir)
+
+	#*****************************************************************
+	# Logging
+	root = logging.getLogger()
+	root.setLevel(logging.DEBUG)
+
+	# Adding file log handleer
+	with open(logfile, 'w'): pass
+	fileHandler = logging.FileHandler(logfile)
+	fileHandler.setLevel(logging.DEBUG)
+	fileHandler.setFormatter(logging.Formatter('%(asctime)s - [%(levelname)s]\t - %(message)s'))
+	root.addHandler(fileHandler)
+
+	# Adding stdout log handler
+	stdoutHandler = logging.StreamHandler(sys.stdout)
+	stdoutHandler.setLevel(logging.INFO)
+	stdoutHandler.setFormatter(logging.Formatter('%(message)s'))
+	root.addHandler(stdoutHandler)
+	
+	#*****************************************************************
+	# Configuration
+	# Verify config file
+	if not os.path.isfile(cfgfile):
+		logging.error("No eXoLauncher configuration file ('" + cfgfile + "') found!")
+		sys.exit(1)
+
+	# Verify dosbox base conf
+	if not os.path.isfile(dbbaseconf):
+		logging.error("No base dosbox.conf ('" + dbbaseconf + "') found!")
+		sys.exit(1)
+
+	# Read config file
+	logging.debug("<<< Global configuration >>>")
+	logging.debug("Reading configuration file...")
+	eXoLConfig = ConfigParser.ConfigParser()
+	eXoLConfig.optionxform=str # For case sensitiveness
+
+	# Open config file
+	eXoLConfig.read(cfgfile)
+
+	# Get DosBOX path
+	dosboxpath = eXoLConfig.get(_eXoLoaderSection, "DosBOX")
+	logging.debug("DosBOX : " + dosboxpath)
+	if not os.path.isfile(dosboxpath):
+		logging.error("DosBOX '" + dosboxpath + "' not found!")
+		sys.exit(1)
+
+	# Get eXoDOS collections
+	eXoCollections = []
+	for option in eXoLConfig.options("Collections"):
+		colpath = eXoLConfig.get("Collections", option)
+		logging.debug("Collection[" + option + "] : " + colpath)
+		eXoCollections.append(colpath)
+	
 	#*****************************************************************
 	# Arguments
 	mode 				= _NoMode
@@ -870,18 +986,19 @@ def main(argv):
 	elif mode == _ImportMode:
 		if not outputDir:
 			logging.error("You must provides an output directory (-o)!")
-			sys.exit(2)
-		# Convert the collection
-		eXoImportCollection(collection, outputDir, doImportArtworks, doImportManuals)
+			logging.info(_eXoLauncherHelp)
+		else:
+			# Convert the collection
+			eXoImportCollection(collection, outputDir, doImportArtworks, doImportManuals)
 	elif mode == _ImportLBMode:
 		if not outputDir:
 			logging.error("You must provides LaunchBox directory (-l)!")
-			sys.exit(2)
-		# Convert the collection
-		eXoImportCollectionLB(collection, outputDir, doImportArtworks, doImportManuals)
+			logging.info(_eXoLauncherHelp)
+		else:
+			# Convert the collection
+			eXoImportCollectionLB(collection, outputDir, doImportArtworks, doImportManuals)
 	else:
 		logging.info(_eXoLauncherHelp)
-		sys.exit(2)
 
 if __name__ == "__main__":
 	try:
@@ -892,4 +1009,4 @@ if __name__ == "__main__":
 		logging.info("Cleaning stuffs...")
 		for tempDir in tempDirs:
 			rmTempDir(tempDir)
-		logging.error(traceback.format_exc())
+		logging.debug(traceback.format_exc())
