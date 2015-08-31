@@ -101,8 +101,9 @@ _ImportLBMode		= 3
 
 # eXo files
 _GameIni			= "game.ini"
-_DBConf				= "dosbox.conf"
 _DescTxt			= "desc.txt"
+_DBConf				= "dosbox.conf"
+_DBMapperMap		= "mapper.map"
 
 # ini files
 _eXoLoaderSection	= "Main"
@@ -120,7 +121,9 @@ _ScreensDir 	= "screenshots"
 _ManualsDir 	= "manuals"
 
 # eXo collection stuffs
-_eXoDosKey = "!dos"
+_eXoDosKey 			= "!dos"
+_eXoMapperMap		= "mapper-0.74.map"
+_eXoInstallBat		= "Install.bat"
 
 # Meagre stuffs
 _Meagre			= "Meagre"
@@ -129,6 +132,7 @@ _Meagre			= "Meagre"
 # Globals
 asciiCorrector			= re.compile(r'[^\x00-\x7F]+')
 nameCleaner				= re.compile(r"\(.*\)")
+archiveNameMatcher		= re.compile(r"unzip[^\"]*\"([^\"]*)\"")
 scriptpath 				= os.path.realpath(__file__)
 scriptdir				= os.path.dirname(scriptpath)
 scriptName, scriptExt 	= os.path.splitext(os.path.basename(scriptpath))
@@ -394,8 +398,18 @@ def eXoCreateFile(eXoGameInfos, dir):
 
 	# Create eXo file
 	tempDir = mkTempDir()
+	
+	# Ini file
 	eXoCreateIniFile(eXoGameInfos, os.path.join(tempDir, _GameIni))
+	
+	# dosbox.conf
 	eXoConvertDosBOXConf(eXoGameInfos.dbconf, os.path.join(tempDir, _DBConf))
+	
+	# mapper.map
+	if eXoGameInfos.dbmapper : 
+		shutil.copyfile(eXoGameInfos.dbmapper, os.path.join(tempDir, _DBMapperMap))
+	
+	# Compression
 	zipf = zipfile.ZipFile(eXoFile, 'w')
 	zipdir(tempDir, zipf)
 	zipf.close()
@@ -413,29 +427,50 @@ def eXoGetRealFilePath(dir, file):
 	if file:
 		return(os.path.join(dir, file))
 
+def eXoGetIniOption(configParser, section, option):
+	try:
+		return(asciiCorrector.sub(' ', configParser.get(section, option)))
+	except:
+		return
+
 class GameInfos:
-	def __init__(self, 
+	def __init__(self,
+	eXoGameName,
 	eXoGameDir,
-	eXoIniPath):
+	eXoArchiveName,
+	eXoDBConf,
+	eXoDBMapper,
+	eXoIniFile):
+		# Init
+		self.gamename 		= eXoGameName
+		self.archivename 	= eXoArchiveName
+		self.dbconf			= eXoDBConf
+		self.dbmapper		= eXoDBMapper
+		
+		# Read from ini file
 		configparser = ConfigParser.ConfigParser()
 		configparser.optionxform=str # For case sensitiveness
-		configparser.read(os.path.join(eXoGameDir, _Meagre, "IniFile", eXoIniPath))
-		self.gamename 		= os.path.splitext(os.path.basename(eXoIniPath))[0]
-		self.archivename 	= self.gamename + ".zip"
+		configparser.read(eXoIniFile)
+		self.name			= eXoGetIniOption(configparser, "Main", "Name")
+		self.publisher		= eXoGetIniOption(configparser, "Main", "Publisher")
+		self.developer		= eXoGetIniOption(configparser, "Main", "Developer")
+		self.year			= int(''.join(c for c in eXoGetIniOption(configparser, "Main", "Year") if c in string.digits).ljust(4,'0'))
+		self.serie			= eXoGetIniOption(configparser, "Main", "Series")
+		self.info			= asciiCorrector.sub(' ', eXoGetDesc(eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "About"), eXoGetIniOption(configparser, "Main", "About"))))
+		self.front 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Front"), 	eXoGetIniOption(configparser, "Main", "Front01"))
+		self.back 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Back"), 	eXoGetIniOption(configparser, "Main", "Back01"))
+		self.title 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Title"), 	eXoGetIniOption(configparser, "Main", "Title01"))
+		self.screen 		= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Screen"), 	eXoGetIniOption(configparser, "Main", "Screen01"))
+		self.manual 		= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Manual"), 	eXoGetIniOption(configparser, "Main", "Manual"))
 		self.exofile		= None
-		self.dbconf			= os.path.join(eXoGameDir, _DBConf)
-		self.name			= asciiCorrector.sub(' ', configparser.get("Main", "Name"))
-		self.genre			= asciiCorrector.sub(' ', configparser.get("Main", "Genre"))
-		self.publisher		= asciiCorrector.sub(' ', configparser.get("Main", "Publisher"))
-		self.developer		= asciiCorrector.sub(' ', configparser.get("Main", "Developer")) 
-		self.year			= int(''.join(c for c in asciiCorrector.sub(' ', configparser.get("Main", "Year")) if c in string.digits).ljust(4,'0'))
-		self.serie			= asciiCorrector.sub(' ', configparser.get("Main", "Series"))
-		self.info			= asciiCorrector.sub(' ', eXoGetDesc(eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "About"), 	configparser.get("Main", "About"))))
-		self.front 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Front"), 	configparser.get("Main", "Front01"))
-		self.back 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Back"), 	configparser.get("Main", "Back01"))
-		self.title 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Title"), 	configparser.get("Main", "Title01"))
-		self.screen 		= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Screen"), 	configparser.get("Main", "Screen01"))
-		self.manual 		= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Manual"), 	configparser.get("Main", "Manual"))
+		
+		# Genre & subs
+		self.genre			= eXoGetIniOption(configparser, "Main", "Genre")
+		if eXoGetIniOption(configparser, "Main", "SubGenre"):
+			self.genre = self.genre + " (" + eXoGetIniOption(configparser, "Main", "SubGenre")
+			if eXoGetIniOption(configparser, "Main", "SubGenre2"):
+				self.genre = self.genre + ", " + eXoGetIniOption(configparser, "Main", "SubGenre2")
+			self.genre = self.genre + ")"
 
 	def update(self, 
 	exofile,
@@ -454,16 +489,6 @@ class GameInfos:
 def eXoImportGame(eXoGameInfos, outputDirs):
 	logging.info("Importing game '" + eXoGameInfos.gamename + "'...")
 	
-	# Verifying DosBOX conf
-	if not os.path.isfile(eXoGameInfos.dbconf):
-		logging.warning("DosBOX config file '" + eXoGameInfos.dbconf + "' not found for " + eXoGameInfos.gamename + "! -> Skipping")
-		return
-
-	# Verifying archive
-	if not searchFileInDirectories(eXoCollections, eXoGameInfos.archivename):
-		logging.warning("No archive '" + eXoGameInfos.archivename + "' found in any collection! -> Skipping")
-		return
-	
 	# Create eXoFile
 	eXoGameInfos.update(
 	eXoCreateFile(eXoGameInfos, outputDirs[_GamesDir]),
@@ -474,11 +499,71 @@ def eXoImportGame(eXoGameInfos, outputDirs):
 	eXoCopyFile(eXoGameInfos.gamename, eXoGameInfos.manual, outputDirs[_ManualsDir]))
 	return(eXoGameInfos)
 
-def findIni(dir):
+def findIniFile(dir):
 	for root, dirs, files in os.walk(dir):
 		for file in files:
 			if ".ini" in file:
-				return(os.path.basename(file))
+				return(os.path.join(root, file))
+
+def eXoFindArchiveName(eXoInstallBat):
+	with open(eXoInstallBat, "r") as fo:
+		for line in iter(fo):
+			matchObj = archiveNameMatcher.match(line)
+			if matchObj is not None:
+				return(matchObj.group(1))
+
+def eXoConvertGameDir(eXoGameDir, outputDirs):
+	logging.info(">>> Processing directory '" + eXoGameDir + "'...")
+	
+	# Install.bat
+	eXoInstallBat = os.path.join(eXoGameDir, _eXoInstallBat)
+	if not os.path.isfile(eXoInstallBat):
+		logging.warning("> No Installation file '%r' found in '%r'! -> Skipping", _eXoInstallBat, eXoGameDir)
+		return
+	
+	# Ini file
+	eXoIniFile 	= findIniFile(eXoGameDir)
+	if eXoIniFile is None:
+		logging.warning("> No Ini file found in '%r' -> Skipping", eXoIniFile)
+		return
+	if not os.path.isfile(eXoIniFile):
+		logging.warning("> Ini file '%r' is invalid! -> Skipping", eXoIniFile)
+		return
+	
+	# Archive
+	eXoArchiveName = eXoFindArchiveName(eXoInstallBat)
+	if eXoArchiveName is None:
+		logging.warning("> No archive found in '%r' -> Skipping", eXoInstallBat)
+		return
+	if eXoArchiveName == os.path.splitext(eXoArchiveName)[0]:
+		logging.warning("> Archive '%r' has no extension -> Adding '.zip'", eXoArchiveName)
+		eXoArchiveName = eXoArchiveName + ".zip"
+	if not searchFileInDirectories(eXoCollections, eXoArchiveName):
+		logging.warning("> No archive '%r' found in any collection! -> Skipping", eXoArchiveName)
+		return
+	
+	# dosbox.conf
+	eXoDBConf	= os.path.join(eXoGameDir, _DBConf)
+	if not os.path.isfile(eXoDBConf):
+		logging.warning("> No DosBOX config file '%r' found in '%r'! -> Skipping", eXoDBConf, eXoGameDir)
+		return
+	
+	# mapper.map
+	eXoDBMapper	= os.path.join(eXoGameDir, _eXoMapperMap)
+	if os.path.isfile(eXoDBMapper):
+		logging.info("> DosBOX mapper file '%r' found in '%r'", eXoDBMapper, eXoGameDir)
+	else:
+		eXoDBMapper = ""
+		
+	# Import
+	eXoGameName = os.path.splitext(eXoArchiveName)[0]
+	return(eXoImportGame(GameInfos(
+	eXoGameName,
+	eXoGameDir,
+	eXoArchiveName,
+	eXoDBConf,
+	eXoDBMapper,
+	eXoIniFile), outputDirs))
 
 def eXoConvertDir(dir, outputDirs):
 	# Verify
@@ -498,11 +583,9 @@ def eXoConvertDir(dir, outputDirs):
 	for item in os.listdir(eXoDir):
 		eXoGameDir = os.path.join(eXoDir,item)
 		if os.path.isdir(eXoGameDir):
-			eXoIni = findIni(eXoGameDir)
-			if eXoIni:
-				eXoGame = eXoImportGame(GameInfos(eXoGameDir, eXoIni), outputDirs)
-				if eXoGame is not None:
-					eXoGamesInfos.append(eXoGame)
+			eXoGame = eXoConvertGameDir(eXoGameDir, outputDirs)
+			if eXoGame is not None:
+				eXoGamesInfos.append(eXoGame)
 	
 	return(eXoGamesInfos)
 
