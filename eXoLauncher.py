@@ -151,7 +151,7 @@ root.setLevel(logging.DEBUG)
 with open(logfile, 'w'): pass
 fileHandler = logging.FileHandler(logfile)
 fileHandler.setLevel(logging.DEBUG)
-fileHandler.setFormatter(logging.Formatter('%(asctime)s - %(message)s'))
+fileHandler.setFormatter(logging.Formatter('%(asctime)s - [%(levelname)s]\t - %(message)s'))
 root.addHandler(fileHandler)
 
 # Adding stdout log handler
@@ -238,7 +238,6 @@ def eXoLaunch(romfile):
 	archivepath = searchFileInDirectories(eXoCollections, archive)
 	if not archivepath:
 		logging.error("No archive '" + archivepath + "' found in any collection!")
-		sys.exit(1)
 
 	#*****************************************************************
 	# Pre-processing
@@ -429,7 +428,7 @@ class GameInfos:
 		self.genre			= asciiCorrector.sub(' ', configparser.get("Main", "Genre"))
 		self.publisher		= asciiCorrector.sub(' ', configparser.get("Main", "Publisher"))
 		self.developer		= asciiCorrector.sub(' ', configparser.get("Main", "Developer")) 
-		self.year			= asciiCorrector.sub(' ', configparser.get("Main", "Year"))
+		self.year			= int(''.join(c for c in asciiCorrector.sub(' ', configparser.get("Main", "Year")) if c in string.digits).ljust(4,'0'))
 		self.serie			= asciiCorrector.sub(' ', configparser.get("Main", "Series"))
 		self.info			= asciiCorrector.sub(' ', eXoGetDesc(eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "About"), 	configparser.get("Main", "About"))))
 		self.front 			= eXoGetRealFilePath(os.path.join(eXoGameDir, _Meagre, "Front"), 	configparser.get("Main", "Front01"))
@@ -501,7 +500,9 @@ def eXoConvertDir(dir, outputDirs):
 		if os.path.isdir(eXoGameDir):
 			eXoIni = findIni(eXoGameDir)
 			if eXoIni:
-				eXoGamesInfos.append(eXoImportGame(GameInfos(eXoGameDir, eXoIni), outputDirs))
+				eXoGame = eXoImportGame(GameInfos(eXoGameDir, eXoIni), outputDirs)
+				if eXoGame is not None:
+					eXoGamesInfos.append(eXoGame)
 	
 	return(eXoGamesInfos)
 
