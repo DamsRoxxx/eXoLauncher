@@ -385,7 +385,7 @@ def eXoLaunch(romfile):
 
 	# Launching dosbox
 	logging.info("Launching DOSBox...")
-	process = subprocess.Popen([dosboxpath, r'-noconsole', r'-exit', r'-conf', dbbaseconf, r'-conf', gameDBConf])
+	process = subprocess.Popen([dbExePath, r'-noconsole', r'-exit', r'-conf', dbbaseconf, r'-conf', gameDBConf], cwd=dbDir)
 	process.wait()
 	logging.info("DOSBox exited(" + str(process.returncode) + ")")
 
@@ -881,7 +881,8 @@ def eXoImportCollectionLB(collection, lbDir, doImportArtworks, doImportManuals):
 #*****************************************************************
 
 def main(argv):
-	global dosboxpath
+	global dbDir
+	global dbExePath
 	global eXoCollections
 	
 	#*****************************************************************
@@ -930,10 +931,12 @@ def main(argv):
 	eXoLConfig.read(cfgfile)
 
 	# Get DosBOX path
-	dosboxpath = eXoLConfig.get(_eXoLoaderSection, "DosBOX")
-	logging.debug("DosBOX : " + dosboxpath)
-	if not os.path.isfile(dosboxpath):
-		logging.error("DosBOX '" + dosboxpath + "' not found!")
+	dbExePath = eXoLConfig.get(_eXoLoaderSection, "DosBOX")
+	dbDir = os.path.dirname(dbExePath)
+	logging.debug("DosBOX : " + dbExePath)
+	logging.debug("DosBOX working directory : " + dbDir)
+	if not os.path.isfile(dbExePath):
+		logging.error("DosBOX '" + dbExePath + "' not found!")
 		sys.exit(1)
 
 	# Get eXoDOS collections
