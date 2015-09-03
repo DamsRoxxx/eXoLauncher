@@ -34,7 +34,7 @@ _ImportLBMode		= 3
 
 # eXo files
 _GameIni			= "game.ini"
-_DescTxt			= "desc.txt"
+_GameCRC			= "game.crc"
 _DBConf				= "dosbox.conf"
 _DBMapperMap		= "mapper.map"
 
@@ -176,11 +176,12 @@ def eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, gameDir):
 	
 	# Extracting game
 	logging.info("> Extracting game archive...")
-	zfile = zipfile.ZipFile(eXoArchivePath)
-	for info in zfile.infolist():
-		logging.debug(" > Extracting '" + info.filename + "'")
-		zfile.extract(info, gameDir)
-	zfile.close()
+	with open(os.path.join(gameDir, _GameCRC), "wb") as gameCRC:
+		with zipfile.ZipFile(eXoArchivePath) as zfile:
+			for info in zfile.infolist():
+				logging.debug(" > Extracting '%s'[%d]", info.filename, info.CRC)
+				zfile.extract(info, gameDir)
+				gameCRC.write(info.filename + ";" + str(info.CRC) + "\n")
 	
 	# if there is a save
 	logging.info("> Looking for a save archive...")
@@ -221,32 +222,32 @@ def eXoUninstallGame(gameDir):
 	# Inifile
 	iniFile = os.path.join(gameDir, _GameIni)
 	if not os.path.isfile(iniFile):
-		logging.error("No 'game.ini' in '%s'! Clean manually.)", gameDir)
+		logging.error("No '%s' in '%s'! Clean manually.", _GameIni, gameDir)
 		sys.exit(1)
 	
 	# Read the info
 	gamename, archive = eXoGetInfos(iniFile)
 	
 	# Verify archive
-	archivepath = searchFileInDirectories(eXoCollections, archive)
-	if not archivepath:
-		logging.error("Archive '%s' not found in any collection! Verify your collections.", archivepath)
+	gameCRC = os.path.join(gameDir, _GameCRC)
+	if not gameCRC:
+		logging.error("No '%s' in '%s'! Clean manually.", _GameCRC, gameDir)
 		sys.exit(1)
 	
 	# Gettings original CRCs
-	logging.debug("> Gettings original CRCs from '%s'...", archivepath)
-	zipFilesCRC = dict()
-	zfile = zipfile.ZipFile(archivepath)
-	for info in zfile.infolist():
-		zipFilesCRC[info.filename] = info.CRC
-	zfile.close()
+	logging.debug("> Gettings original CRCs from '%s'...", _GameCRC)
+	filesCRC = dict()
+	with open(gameCRC, "rb") as gameCRCFile:
+		for line in gameCRCFile:
+			file = line.split(';')
+			filesCRC[file[0]] = int(file[1])
 	
 	# Remove unmodified stuffs
 	logging.info("> Cleaning game directory...")
-	for zipFile in reversed(sorted(zipFilesCRC.keys())):
+	for zipFile in reversed(sorted(filesCRC.keys())):
 		localFile 	= os.path.join(gameDir,zipFile)
 		if os.path.isfile(localFile):
-			zipFileCRC		= zipFilesCRC[zipFile]
+			zipFileCRC		= filesCRC[zipFile]
 			localFileCRC 	= getCRC(localFile)
 			#logging.info(localFile + "[" + str(localFileCRC) + "]")
 			if localFileCRC == zipFileCRC:
@@ -259,6 +260,7 @@ def eXoUninstallGame(gameDir):
 	
 	# Deleting game.ini & dosbox.conf file
 	os.remove(iniFile)
+	os.remove(gameCRC)
 	os.remove(os.path.join(gameDir, _DBConf))
 	
 	# If there is stuff left
@@ -888,8 +890,9 @@ def main(argv):
 	#*****************************************************************
 	# Working directories
 	# Init working directories
-	if not os.path.isdir(workingdir): 		os.makedirs(workingdir)
-	if not os.path.isdir(savesdir): 		os.makedirs(savesdir)
+	if not os.path.isdir(workingdir): 	os.makedirs(workingdir)
+	if not os.path.isdir(gamesdir): 	os.makedirs(gamesdir)
+	if not os.path.isdir(savesdir): 	os.makedirs(savesdir)
 
 	#*****************************************************************
 	# Logging
