@@ -29,8 +29,10 @@ _eXoLauncherHelp 	= "Usage : eXoLauncher.py -r <eXo file>"
 # Mode
 _NoMode				= 0
 _LaunchMode			= 1
-_ImportMode			= 2
-_ImportLBMode		= 3
+_InstallMode		= 2
+_RemoveMode			= 3
+_ImportMode			= 4
+_ImportLBMode		= 5
 
 # eXo files
 _GameIni			= "game.ini"
@@ -67,6 +69,7 @@ asciiCorrector			= re.compile(r'[^\x00-\x7F]+')
 nameCleaner				= re.compile(r"\(.*\)")
 archiveNameMatcher		= re.compile(r"unzip[^\"]*\"([^\"]*)\"")
 slotsMatcher			= re.compile(r"slot(\d\d)")
+installsMatcher			= re.compile(r"install(\d\d)")
 scriptpath 				= os.path.realpath(__file__)
 scriptdir				= os.path.dirname(scriptpath)
 scriptName, scriptExt 	= os.path.splitext(os.path.basename(scriptpath))
@@ -77,6 +80,7 @@ workingdir 				= os.path.join(scriptdir, "_temp")
 savesdir 				= os.path.join(scriptdir, "saves")
 gamesdir 				= os.path.join(scriptdir, "games")
 maxSlots				= 11
+maxInstalls				= 100
 
 #*****************************************************************
 #*****************************************************************
@@ -168,10 +172,24 @@ def xmlIndent(elem, level=0):
 
 #*****************************************************************
 #*****************************************************************
-# Launch Mode
+# Rom Mode
 #*****************************************************************
 #*****************************************************************
-def eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, gameDir):
+def getInfos(eXoIniFile):
+	# Read the info
+	return getInfosFp(open(eXoIniFile, "r"))
+
+def getInfosFp(eXoIniFileFp):
+	# Read the info
+	configparser = ConfigParser.ConfigParser()
+	configparser.optionxform=str # For case sensitiveness
+	configparser.readfp(eXoIniFileFp)
+	gamename	= configparser.get(_eXoLoaderSection, _GameNameKey)
+	archive		= configparser.get(_eXoLoaderSection, _ArchiveKey)
+	return(gamename, archive)
+
+def installGame(eXoFile, eXoGameName, eXoArchivePath, gameDir):
+	logging.info("Installing game '%s'...", eXoGameName)
 	savePath 	= os.path.join(savesdir, eXoGameName + ".zip")
 	
 	# Extracting game
@@ -209,16 +227,7 @@ def eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, gameDir):
 		confout.write(newline)
 	confout.close()
 
-def eXoGetInfos(eXoIniFile):
-	# Read the info
-	configparser = ConfigParser.ConfigParser()
-	configparser.optionxform=str # For case sensitiveness
-	configparser.read(eXoIniFile)
-	gamename	= configparser.get(_eXoLoaderSection, _GameNameKey)
-	archive		= configparser.get(_eXoLoaderSection, _ArchiveKey)
-	return(gamename, archive)
-
-def eXoUninstallGame(gameDir):
+def removeGame(gameDir):
 	# Inifile
 	iniFile = os.path.join(gameDir, _GameIni)
 	if not os.path.isfile(iniFile):
@@ -226,7 +235,8 @@ def eXoUninstallGame(gameDir):
 		sys.exit(1)
 	
 	# Read the info
-	gamename, archive = eXoGetInfos(iniFile)
+	gamename, archive = getInfos(iniFile)
+	logging.info("Removing game '%s'...", gamename)
 	
 	# Verify archive
 	gameCRC = os.path.join(gameDir, _GameCRC)
@@ -275,110 +285,201 @@ def eXoUninstallGame(gameDir):
 	else:
 		logging.info(" > No modified files.")
 
-def eXoFindFreeSlot(installedGames):
-		# Find a free slot
-		for slot in range(1, maxSlots):
-			if slot not in installedGames.values():
-				return slot
+def findFreeInstall(installedGames):
+	# Find a free slot
+	for slot in range(1, maxInstalls):
+		if slot not in installedGames.values():
+			return slot
 
-def eXoGetSlotName(slot):
-	return "slot" + str(slot).rjust(2,'0')
+def findFreeSlot(slotedGames):
+	# Find a free slot
+	for slot in range(1, maxSlots):
+		if slot not in slotedGames.values():
+			return slot
 
-def eXoInstallGame(eXoFile, eXoGameName, eXoArchivePath):
-	logging.info("Installing game '%s'...", eXoGameName)
+def getInstallName(slot):
+	return "install" + str(slot).rjust(2,'0')
 	
-	# Gathering games in slots
-	usedSlots 		= dict()
+def getSlotName(slot):
+	return "slot" + str(slot).rjust(2,'0')
+	
+def getInstalledGames():
 	installedGames 	= dict()
+	for dir in os.listdir(gamesdir):
+		item = os.path.join(gamesdir, dir)
+		if os.path.isdir(item):
+			matchObj = installsMatcher.match(dir)
+			if matchObj is not None:
+				id 	= int(matchObj.group(1))
+				iniFile = os.path.join(item, _GameIni)
+				if not os.path.isfile(iniFile):
+					logging.error("Invalid Install[%i] : No 'game.ini' in '%s'! Clean manually.)", id, item)
+					sys.exit(1)
+				gamename, archive = getInfos(iniFile)
+				logging.debug("Install[%i] - %s", id, gamename)
+				installedGames[gamename] 	= id
+	return installedGames
+	
+def getSlotedGames():
+	slotedGames 	= dict()
 	for dir in os.listdir(gamesdir):
 		item = os.path.join(gamesdir, dir)
 		if os.path.isdir(item):
 			matchObj = slotsMatcher.match(dir)
 			if matchObj is not None:
-				slot 	= int(matchObj.group(1))
+				id 	= int(matchObj.group(1))
 				iniFile = os.path.join(item, _GameIni)
 				if not os.path.isfile(iniFile):
-					logging.error("Invalid Slot[%i] : No 'game.ini' in '%s'! Clean manually.)", slot, item)
+					logging.error("Invalid Slot[%i] : No 'game.ini' in '%s'! Clean manually.)", id, item)
 					sys.exit(1)
-				gamename, archive = eXoGetInfos(iniFile)
-				logging.debug("Slot[%i] - %s", slot, gamename)
-				usedSlots[slot]			= gamename
-				installedGames[gamename] 	= slot
+				gamename, archive = getInfos(iniFile)
+				logging.debug("Slot[%i] - %s", id, gamename)
+				slotedGames[gamename] 	= id
+	return slotedGames
+
+def getGame(eXoFile, eXoGameName, eXoArchivePath):
+	logging.info("Looking for game '%s'...", eXoGameName)
 	
-	# Game is already installed, return current dir
+	# Gathering installed games
+	logging.info("> Looking for a manual installation of game '%s'...", eXoGameName)
+	installedGames 	= getInstalledGames()
 	if eXoGameName in installedGames.keys():
-		logging.info("> Game '%s' is already installed in Slot[%i]", eXoGameName, slot)
-		return os.path.join(gamesdir, eXoGetSlotName(installedGames[eXoGameName]))
+		id = installedGames[eXoGameName]
+		logging.info("> Game '%s' is installed in Install[%i]", eXoGameName, id)
+		return os.path.join(gamesdir, getInstallName(id))
+	
+	# Gathering games in slots
+	logging.info("> Looking for an automatic installation of game '%s'...", eXoGameName)
+	slotedGames 	= getSlotedGames()
+	if eXoGameName in slotedGames.keys():
+		id = slotedGames[eXoGameName]
+		logging.info("> Game '%s' is installed in Slot[%i]", eXoGameName, id)
+		return os.path.join(gamesdir, getSlotName(id))
 	
 	# Find a free slot or uninstall game to get one
-	slot = eXoFindFreeSlot(installedGames)
+	logging.info("> Game '%s' is not installed. Automatic installation in a free slot...", eXoGameName)
+	slot = findFreeSlot(slotedGames)
 	if slot is None:
 		modifedSlots = dict()
-		logging.info("> No empty slots, uninstalling oldest not modified game...")
+		logging.info("> No empty slot, uninstalling oldest not modified game...")
 		# Recovering modifications times
-		for slot in installedGames.values():
-			modificationTime = os.path.getmtime(os.path.join(gamesdir, eXoGetSlotName(slot)))
+		for slot in slotedGames.values():
+			modificationTime = os.path.getmtime(os.path.join(gamesdir, getSlotName(slot)))
 			logging.debug("Slot[%i] - %s", slot, time.ctime(modificationTime))
 			modifedSlots[modificationTime] = slot
 		
 		# Uninstalling oldest
 		slot = modifedSlots[sorted(modifedSlots.keys())[0]]
-		logging.info("> Uninstalling Slot[%i] - %s...", slot, usedSlots[slot])
-		eXoUninstallGame(os.path.join(gamesdir, eXoGetSlotName(slot)))
-		rmTree(os.path.join(gamesdir, eXoGetSlotName(slot)))
+		logging.info("> Uninstalling Slot[%i] - %s...", slot, getSlotName(slot))
+		removeGame(os.path.join(gamesdir, getSlotName(slot)))
+		rmTree(os.path.join(gamesdir, getSlotName(slot)))
 		
 	# Install game
 	logging.info("> Game '%s' will be installed in Slot[%i]", eXoGameName, slot)
-	slotDir = os.path.join(gamesdir, eXoGetSlotName(slot))
+	slotDir = os.path.join(gamesdir, getSlotName(slot))
 	os.makedirs(slotDir)
-	eXoExtractGame(eXoFile, eXoGameName, eXoArchivePath, slotDir)
+	installGame(eXoFile, eXoGameName, eXoArchivePath, slotDir)
 	return slotDir
-
-def eXoLaunch(romfile):
-	if not os.path.isfile(romfile):
-		logging.error("Invalid \"rom\" file ('" + romfile + "')!")
+	
+def geteXoInfos(eXoFileName):
+	# Verify eXo file
+	if not os.path.isfile(eXoFileName):
+		logging.error("Invalid eXo file '%s'!", eXoFileName)
 		logging.info(_eXoLauncherHelp)
 		sys.exit(1)
 	
-	# Opening rom
-	logging.info("Opening eXo file '" + romfile + "'...")
+	# Open eXo file
 	try:
-		eXoFile = zipfile.ZipFile(romfile)
+		eXoFile = zipfile.ZipFile(eXoFileName)
 		eXoFile.getinfo(_GameIni)
 		eXoFile.getinfo(_DBConf)
 	except (BadZipfile, KeyError):
-		logging.error("File '" + romfile + "' does not seems to be a valid eXo file!")
+		logging.error("File '%s' does not seems to be a valid eXo file!", eXoFileName)
 		sys.exit(1)
 
 	# Reading config
-	configparser = ConfigParser.ConfigParser()
-	configparser.optionxform=str # For case sensitiveness
-	configparser.readfp(eXoFile.open(_GameIni))
-	gamename	= configparser.get(_eXoLoaderSection, _GameNameKey)
-	archive		= configparser.get(_eXoLoaderSection, _ArchiveKey)
+	gamename, archive = getInfosFp(eXoFile.open(_GameIni))
 
-	if not gamename:
+	if gamename is None:
 		logging.error("Invalid Game Name. Contact your guru!")
 		sys.exit(1)
 
-	if not archive:
+	if archive is None:
 		logging.error("Invalid Archive. Contact your guru!")
 		sys.exit(1)
 
-	logging.info("> GameName : " + gamename)
-	logging.info("> Archive  : " + archive)
+	logging.debug("> GameName : " + gamename)
+	logging.debug("> Archive  : " + archive)
+	return eXoFile, gamename, archive
 
+def getArchivePath(archive):
 	# Verify archive
 	archivepath = searchFileInDirectories(eXoCollections, archive)
-	if not archivepath:
-		logging.error("No archive '" + archivepath + "' found in any collection!")
+	if archivepath is None:
+		logging.error("No archive '%s' found in any collection!", archive)
+		sys.exit(1)
+
+	logging.debug("> Archive path : " + archivepath)
+	return archivepath
+	
+def eXoInstall(eXoFileName):
+	logging.info("Installing eXo file '%s'...", eXoFileName)
+	eXoFile, eXoGameName, archive = geteXoInfos(eXoFileName)
+	eXoArchivePath = getArchivePath(archive)
+	
+	# Gathering installed games
+	logging.info("> Looking for a manual installation of game '%s'...", eXoGameName)
+	installedGames 	= getInstalledGames()
+	if eXoGameName in installedGames.keys():
+		id = installedGames[eXoGameName]
+		logging.info("> Game '%s' is already installed in Install[%i]", eXoGameName, id)
+		return
+
+	# Find a free install slot
+	logging.info("> Game '%s' is not installed. installation in a free install slot...", eXoGameName)
+	id = findFreeInstall(installedGames)
+	if id is None:
+		logging.info("> No empty install slot, remove some installed games!")
+		return
+
+	# Install game
+	logging.info("> Game '%s' will be installed in Install[%i]", eXoGameName, id)
+	installDir = os.path.join(gamesdir, getInstallName(id))
+	os.makedirs(installDir)
+	installGame(eXoFile, eXoGameName, eXoArchivePath, installDir)
+	return installDir
+	
+def eXoRemove(eXoFileName):
+	logging.info("Removing eXo file '%s'...", eXoFileName)
+	eXoFile, eXoGameName, archive = geteXoInfos(eXoFileName)
+	
+	# Gathering installed games
+	logging.info("> Looking for a manual installation of game '%s'...", eXoGameName)
+	installedGames 	= getInstalledGames()
+	if eXoGameName not in installedGames.keys():
+		logging.error("> Game '%s' is not installed!", eXoGameName)
+		return
+
+	# Remove game
+	id 			= installedGames[eXoGameName]
+	installName = getInstallName(id)
+	installPath = os.path.join(gamesdir, installName)
+	logging.info("> Removing Install[%i] - %s...", id, installName)
+	removeGame(installPath)
+	rmTree(installPath)
+
+
+def eXoLaunch(eXoFileName):
+	logging.info("Launching eXo file '%s'...", eXoFileName)
+	eXoFile, gamename, archive = geteXoInfos(eXoFileName)
+	archivepath = getArchivePath(archive)
 
 	#*****************************************************************
 	# Pre-processing
 	logging.debug("<<< Pre-processing >>>")
 
 	# Setting up directories
-	gameDir 	= eXoInstallGame(eXoFile, gamename, archivepath)
+	gameDir 	= getGame(eXoFile, gamename, archivepath)
 	gameDBConf 	= os.path.join(gameDir, _DBConf)
 
 	#*****************************************************************
@@ -959,7 +1060,7 @@ def main(argv):
 	doImportManuals		= False
 	
 	try:
-	  opts, args = getopt.getopt(argv,"hamr:i:o:l:",["rom="])
+	  opts, args = getopt.getopt(argv,"hami:o:l:",["launch","install","remove","rom=","output="])
 	except getopt.GetoptError:
 	  logging.info(_eXoLauncherHelp)
 	  sys.exit(2)
@@ -967,8 +1068,13 @@ def main(argv):
 	  if opt == '-h':
 		logging.info(_eXoLauncherHelp)
 		sys.exit()
-	  elif opt in ("-r", "--rom"):
+	  elif opt in ("--launch"):
 		mode = _LaunchMode
+	  elif opt in ("--install"):
+		mode = _InstallMode
+	  elif opt in ("--remove"):
+		mode = _RemoveMode
+	  elif opt in ("-r", "--rom"):
 		romfile = arg
 	  elif opt in ("-i", "--import"):
 		mode = _ImportMode
@@ -989,6 +1095,12 @@ def main(argv):
 	if mode == _LaunchMode:
 		# Launch the rom file
 		eXoLaunch(romfile)
+	elif mode == _InstallMode:
+		# Launch the rom file
+		eXoInstall(romfile)
+	elif mode == _RemoveMode:
+		# Launch the rom file
+		eXoRemove(romfile)
 	elif mode == _ImportMode:
 		if not outputDir:
 			logging.error("You must provides an output directory (-o)!")
